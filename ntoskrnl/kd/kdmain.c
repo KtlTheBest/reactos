@@ -17,11 +17,12 @@ BOOLEAN KdDebuggerEnabled = FALSE;
 BOOLEAN KdEnteredDebugger = FALSE;
 BOOLEAN KdDebuggerNotPresent = TRUE;
 BOOLEAN KdBreakAfterSymbolLoad = FALSE;
-BOOLEAN KdpBreakPending = FALSE;
 BOOLEAN KdPitchDebugger = TRUE;
 BOOLEAN KdIgnoreUmExceptions = FALSE;
 KD_CONTEXT KdpContext;
 ULONG Kd_WIN2000_Mask;
+LONG KdpTimeSlipPending;
+KDDEBUGGER_DATA64 KdDebuggerDataBlock;
 VOID NTAPI PspDumpThreads(BOOLEAN SystemThreads);
 
 typedef struct
@@ -30,7 +31,7 @@ typedef struct
     ULONG Level;
 } KD_COMPONENT_DATA;
 #define MAX_KD_COMPONENT_TABLE_ENTRIES 128
-KD_COMPONENT_DATA KdComponentTable[MAX_KD_COMPONENT_TABLE_ENTRIES];
+KD_COMPONENT_DATA KdpComponentTable[MAX_KD_COMPONENT_TABLE_ENTRIES];
 ULONG KdComponentTableEntries = 0;
 
 ULONG Kd_DEFAULT_MASK = 1 << DPFLTR_ERROR_LEVEL;
@@ -205,7 +206,9 @@ KdpEnterDebuggerException(IN PKTRAP_FRAME TrapFrame,
                                     ExceptionInformation[2],
                                     OutString,
                                     OutStringLength,
-                                    PreviousMode);
+                                    PreviousMode,
+                                    TrapFrame,
+                                    ExceptionFrame);
 
             /* Return the number of characters that we received */
             Context->Eax = ReturnValue;
@@ -255,37 +258,6 @@ KdpEnterDebuggerException(IN PKTRAP_FRAME TrapFrame,
 
 BOOLEAN
 NTAPI
-KdpCallGdb(IN PKTRAP_FRAME TrapFrame,
-           IN PEXCEPTION_RECORD ExceptionRecord,
-           IN PCONTEXT Context)
-{
-    KD_CONTINUE_TYPE Return = kdDoNotHandleException;
-
-    /* Get out of here if the Debugger isn't connected */
-    if (KdDebuggerNotPresent) return FALSE;
-
-    /* FIXME:
-     * Right now, the GDB wrapper seems to handle exceptions differntly
-     * from KDGB and both are called at different times, while the GDB
-     * one is only called once and that's it. I don't really have the knowledge
-     * to fix the GDB stub, so until then, we'll be using this hack
-     */
-    if (WrapperInitRoutine)
-    {
-        Return = WrapperTable.KdpExceptionRoutine(ExceptionRecord,
-                                                  Context,
-                                                  TrapFrame);
-    }
-
-    /* Debugger didn't handle it, please handle! */
-    if (Return == kdHandleException) return FALSE;
-
-    /* Debugger handled it */
-    return TRUE;
-}
-
-BOOLEAN
-NTAPI
 KdIsThisAKdTrap(IN PEXCEPTION_RECORD ExceptionRecord,
                 IN PCONTEXT Context,
                 IN KPROCESSOR_MODE PreviousMode)
@@ -295,6 +267,12 @@ KdIsThisAKdTrap(IN PEXCEPTION_RECORD ExceptionRecord,
 }
 
 /* PUBLIC FUNCTIONS *********************************************************/
+
+VOID
+NTAPI
+KdUpdateDataBlock(VOID)
+{
+}
 
 /*
  * @implemented
@@ -334,6 +312,13 @@ KdDisableDebugger(VOID)
     return STATUS_SUCCESS;
 }
 
+NTSTATUS
+NTAPI
+KdEnableDebuggerWithLock(IN BOOLEAN NeedLock)
+{
+    return STATUS_ACCESS_DENIED;
+}
+
 /*
  * @implemented
  */
@@ -366,7 +351,7 @@ BOOLEAN
 NTAPI
 KdPollBreakIn(VOID)
 {
-    return KdpBreakPending;
+    return FALSE;
 }
 
 /*
@@ -415,10 +400,10 @@ NtQueryDebugFilterState(IN ULONG ComponentId,
         for (i = 0; i < KdComponentTableEntries; i++)
         {
             /* Check if it is the right component */
-            if (ComponentId == KdComponentTable[i].ComponentId)
+            if (ComponentId == KdpComponentTable[i].ComponentId)
             {
                 /* Check if mask are matching */
-                return (Level & KdComponentTable[i].Level) ? TRUE : FALSE;
+                return (Level & KdpComponentTable[i].Level) ? TRUE : FALSE;
             }
         }
     }
@@ -455,7 +440,7 @@ NtSetDebugFilterState(IN ULONG ComponentId,
     /* Search for an existing entry */
     for (i = 0; i < KdComponentTableEntries; i++ )
     {
-        if (ComponentId == KdComponentTable[i].ComponentId)
+        if (ComponentId == KdpComponentTable[i].ComponentId)
             break;
     }
 
@@ -468,15 +453,15 @@ NtSetDebugFilterState(IN ULONG ComponentId,
 
         /* Add a new entry */
         ++KdComponentTableEntries;
-        KdComponentTable[i].ComponentId = ComponentId;
-        KdComponentTable[i].Level = Kd_DEFAULT_MASK;
+        KdpComponentTable[i].ComponentId = ComponentId;
+        KdpComponentTable[i].Level = Kd_DEFAULT_MASK;
     }
 
     /* Update entry table */
     if (State)
-        KdComponentTable[i].Level |= Level;
+        KdpComponentTable[i].Level |= Level;
     else
-        KdComponentTable[i].Level &= ~Level;
+        KdpComponentTable[i].Level &= ~Level;
 
     return STATUS_SUCCESS;
 }

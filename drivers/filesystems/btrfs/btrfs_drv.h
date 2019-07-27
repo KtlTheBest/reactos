@@ -101,6 +101,9 @@
 #define EA_EA "user.EA"
 #define EA_EA_HASH 0x8270dd43
 
+#define EA_CASE_SENSITIVE "user.casesensitive"
+#define EA_CASE_SENSITIVE_HASH 0x1a9d97d4
+
 #define EA_PROP_COMPRESSION "btrfs.compression"
 #define EA_PROP_COMPRESSION_HASH 0x20ccdf69
 
@@ -132,9 +135,17 @@
 #define FILE_SUPPORTS_BLOCK_REFCOUNTING 0x08000000
 #endif
 
+#ifndef FILE_SUPPORTS_POSIX_UNLINK_RENAME
+#define FILE_SUPPORTS_POSIX_UNLINK_RENAME 0x00000400
+#endif
+
 #ifndef FILE_DEVICE_ALLOW_APPCONTAINER_TRAVERSAL
 #define FILE_DEVICE_ALLOW_APPCONTAINER_TRAVERSAL 0x00020000
 #endif
+
+typedef struct _FILE_ID_128 {
+    UCHAR Identifier[16];
+} FILE_ID_128, *PFILE_ID_128;
 
 typedef struct _DUPLICATE_EXTENTS_DATA {
     HANDLE FileHandle;
@@ -260,6 +271,7 @@ typedef struct _fcb {
     struct _device_extension* Vcb;
     struct _root* subvol;
     UINT64 inode;
+    UINT32 hash;
     UINT8 type;
     INODE_ITEM inode_item;
     SECURITY_DESCRIPTOR* sd;
@@ -279,6 +291,9 @@ typedef struct _fcb {
     BOOL inode_item_changed;
     enum prop_compression_type prop_compression;
     LIST_ENTRY xattrs;
+    BOOL marked_as_orphan;
+    BOOL case_sensitive;
+    BOOL case_sensitive_set;
 
     LIST_ENTRY dir_children_index;
     LIST_ENTRY dir_children_hash;
@@ -309,7 +324,6 @@ typedef struct _fcb {
 
 typedef struct {
     ERESOURCE fileref_lock;
-    ERESOURCE children_lock;
 } file_ref_nonpaged;
 
 typedef struct _file_ref {
@@ -317,6 +331,7 @@ typedef struct _file_ref {
     ANSI_STRING oldutf8;
     UINT64 oldindex;
     BOOL delete_on_close;
+    BOOL posix_delete;
     BOOL deleted;
     BOOL created;
     file_ref_nonpaged* nonpaged;
@@ -392,7 +407,12 @@ typedef struct _tree_data {
     };
 } tree_data;
 
+typedef struct {
+    FAST_MUTEX mutex;
+} tree_nonpaged;
+
 typedef struct _tree {
+    tree_nonpaged* nonpaged;
     tree_header header;
     UINT32 hash;
     BOOL has_address;
@@ -428,7 +448,10 @@ typedef struct _root {
     PEPROCESS reserved;
     UINT64 parent;
     LONG send_ops;
+    UINT64 fcbs_version;
+    BOOL checked_for_orphans;
     LIST_ENTRY fcbs;
+    LIST_ENTRY* fcbs_ptrs[256];
     LIST_ENTRY list_entry;
     LIST_ENTRY list_entry_dirty;
 } root;
@@ -742,6 +765,7 @@ typedef struct _device_extension {
     file_ref* root_fileref;
     LONG open_files;
     _Has_lock_level_(fcb_lock) ERESOURCE fcb_lock;
+    ERESOURCE fileref_lock;
     ERESOURCE load_lock;
     _Has_lock_level_(tree_lock) ERESOURCE tree_lock;
     PNOTIFY_SYNC NotifySync;
@@ -768,6 +792,7 @@ typedef struct _device_extension {
     LIST_ENTRY trees;
     LIST_ENTRY trees_hash;
     LIST_ENTRY* trees_ptrs[256];
+    FAST_MUTEX trees_list_mutex;
     LIST_ENTRY all_fcbs;
     LIST_ENTRY dirty_fcbs;
     ERESOURCE dirty_fcbs_lock;
@@ -1087,9 +1112,9 @@ BOOL get_xattr(_In_ _Requires_lock_held_(_Curr_->tree_lock) device_extension* Vc
                _Out_ UINT8** data, _Out_ UINT16* datalen, _In_opt_ PIRP Irp);
 
 #ifndef DEBUG_FCB_REFCOUNTS
-void free_fcb(_Requires_exclusive_lock_held_(_Curr_->fcb_lock) _In_ device_extension* Vcb, _Inout_ fcb* fcb);
+void free_fcb(_Inout_ fcb* fcb);
 #endif
-void free_fileref(_Requires_exclusive_lock_held_(_Curr_->fcb_lock) _In_ device_extension* Vcb, _Inout_ file_ref* fr);
+void free_fileref(_Inout_ file_ref* fr);
 void protect_superblocks(_Inout_ chunk* c);
 BOOL is_top_level(_In_ PIRP Irp);
 NTSTATUS create_root(_In_ _Requires_exclusive_lock_held_(_Curr_->tree_lock) device_extension* Vcb, _In_ UINT64 id,
@@ -1114,7 +1139,7 @@ WCHAR* file_desc(_In_ PFILE_OBJECT FileObject);
 WCHAR* file_desc_fileref(_In_ file_ref* fileref);
 void mark_fcb_dirty(_In_ fcb* fcb);
 void mark_fileref_dirty(_In_ file_ref* fileref);
-NTSTATUS delete_fileref(_In_ file_ref* fileref, _In_opt_ PFILE_OBJECT FileObject, _In_opt_ PIRP Irp, _In_ LIST_ENTRY* rollback);
+NTSTATUS delete_fileref(_In_ file_ref* fileref, _In_opt_ PFILE_OBJECT FileObject, _In_ BOOL make_orphan, _In_opt_ PIRP Irp, _In_ LIST_ENTRY* rollback);
 void chunk_lock_range(_In_ device_extension* Vcb, _In_ chunk* c, _In_ UINT64 start, _In_ UINT64 length);
 void chunk_unlock_range(_In_ device_extension* Vcb, _In_ chunk* c, _In_ UINT64 start, _In_ UINT64 length);
 void init_device(_In_ device_extension* Vcb, _Inout_ device* dev, _In_ BOOL get_nums);
@@ -1129,6 +1154,11 @@ NTSTATUS NTAPI AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT PhysicalDev
 #else
 NTSTATUS AddDevice(PDRIVER_OBJECT DriverObject, PDEVICE_OBJECT PhysicalDeviceObject);
 #endif
+void reap_fcb(fcb* fcb);
+void reap_fcbs(device_extension* Vcb);
+void reap_fileref(device_extension* Vcb, file_ref* fr);
+void reap_filerefs(device_extension* Vcb, file_ref* fr);
+UINT64 chunk_estimate_phys_size(device_extension* Vcb, chunk* c, UINT64 u);
 
 #ifdef _MSC_VER
 #define funcname __FUNCTION__
@@ -1192,8 +1222,8 @@ void _debug_message(_In_ const char* func, _In_ char* s, ...);
 #endif
 
 #ifdef DEBUG_FCB_REFCOUNTS
-void _free_fcb(_Requires_exclusive_lock_held_(_Curr_->fcb_lock) _In_ device_extension* Vcb, _Inout_ fcb* fcb, _In_ const char* func);
-#define free_fcb(Vcb, fcb) _free_fcb(Vcb, fcb, funcname)
+void _free_fcb(_Inout_ fcb* fcb, _In_ const char* func);
+#define free_fcb(fcb) _free_fcb(fcb, funcname)
 #endif
 
 // in fastio.c
@@ -1251,9 +1281,9 @@ NTSTATUS insert_tree_item(_In_ _Requires_exclusive_lock_held_(_Curr_->tree_lock)
                           _In_ UINT8 obj_type, _In_ UINT64 offset, _In_reads_bytes_opt_(size) _When_(return >= 0, __drv_aliasesMem) void* data,
                           _In_ UINT16 size, _Out_opt_ traverse_ptr* ptp, _In_opt_ PIRP Irp);
 NTSTATUS delete_tree_item(_In_ _Requires_exclusive_lock_held_(_Curr_->tree_lock) device_extension* Vcb, _Inout_ traverse_ptr* tp);
-tree* free_tree(tree* t);
-NTSTATUS load_tree(device_extension* Vcb, UINT64 addr, root* r, tree** pt, UINT64 generation, PIRP Irp);
-NTSTATUS do_load_tree(device_extension* Vcb, tree_holder* th, root* r, tree* t, tree_data* td, BOOL* loaded, PIRP Irp);
+void free_tree(tree* t);
+NTSTATUS load_tree(device_extension* Vcb, UINT64 addr, UINT8* buf, root* r, tree** pt);
+NTSTATUS do_load_tree(device_extension* Vcb, tree_holder* th, root* r, tree* t, tree_data* td, PIRP Irp);
 void clear_rollback(LIST_ENTRY* rollback);
 void do_rollback(device_extension* Vcb, LIST_ENTRY* rollback);
 void free_trees_root(device_extension* Vcb, root* r);
@@ -1380,7 +1410,6 @@ NTSTATUS NTAPI drv_set_ea(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp);
 BOOL has_open_children(file_ref* fileref);
 NTSTATUS stream_set_end_of_file_information(device_extension* Vcb, UINT16 end, fcb* fcb, file_ref* fileref, BOOL advance_only);
 NTSTATUS fileref_get_filename(file_ref* fileref, PUNICODE_STRING fn, USHORT* name_offset, ULONG* preqlen);
-NTSTATUS open_fileref_by_inode(_Requires_exclusive_lock_held_(_Curr_->fcb_lock) device_extension* Vcb, root* subvol, UINT64 inode, file_ref** pfr, PIRP Irp);
 void insert_dir_child_into_hash_lists(fcb* fcb, dir_child* dc);
 void remove_dir_child_from_hash_lists(fcb* fcb, dir_child* dc);
 
@@ -1400,7 +1429,7 @@ NTSTATUS open_fileref(_Requires_lock_held_(_Curr_->tree_lock) _Requires_exclusiv
                       _In_ PUNICODE_STRING fnus, _In_opt_ file_ref* related, _In_ BOOL parent, _Out_opt_ USHORT* parsed, _Out_opt_ ULONG* fn_offset, _In_ POOL_TYPE pooltype,
                       _In_ BOOL case_sensitive, _In_opt_ PIRP Irp);
 NTSTATUS open_fcb(_Requires_lock_held_(_Curr_->tree_lock) _Requires_exclusive_lock_held_(_Curr_->fcb_lock) device_extension* Vcb,
-                  root* subvol, UINT64 inode, UINT8 type, PANSI_STRING utf8, fcb* parent, fcb** pfcb, POOL_TYPE pooltype, PIRP Irp);
+                  root* subvol, UINT64 inode, UINT8 type, PANSI_STRING utf8, BOOL always_add_hl, fcb* parent, fcb** pfcb, POOL_TYPE pooltype, PIRP Irp);
 NTSTATUS load_csum(_Requires_lock_held_(_Curr_->tree_lock) device_extension* Vcb, UINT32* csum, UINT64 start, UINT64 length, PIRP Irp);
 NTSTATUS load_dir_children(_Requires_lock_held_(_Curr_->tree_lock) device_extension* Vcb, fcb* fcb, BOOL ignore_size, PIRP Irp);
 NTSTATUS add_dir_child(fcb* fcb, UINT64 inode, BOOL subvol, PANSI_STRING utf8, PUNICODE_STRING name, UINT8 type, dir_child** pdc);
@@ -1411,6 +1440,7 @@ fcb* create_fcb(device_extension* Vcb, POOL_TYPE pool_type);
 NTSTATUS find_file_in_dir(PUNICODE_STRING filename, fcb* fcb, root** subvol, UINT64* inode, dir_child** pdc, BOOL case_sensitive);
 UINT32 inherit_mode(fcb* parfcb, BOOL is_dir);
 file_ref* create_fileref(device_extension* Vcb);
+NTSTATUS open_fileref_by_inode(_Requires_exclusive_lock_held_(_Curr_->fcb_lock) device_extension* Vcb, root* subvol, UINT64 inode, file_ref** pfr, PIRP Irp);
 
 // in fsctl.c
 NTSTATUS fsctl_request(PDEVICE_OBJECT DeviceObject, PIRP* Pirp, UINT32 type);

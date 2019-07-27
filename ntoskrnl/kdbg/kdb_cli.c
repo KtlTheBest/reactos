@@ -849,7 +849,7 @@ KdbpCmdRegs(
     ULONG Argc,
     PCHAR Argv[])
 {
-    PKTRAP_FRAME Tf = &KdbCurrentTrapFrame->Tf;
+    PCONTEXT Tf = &KdbCurrentTrapFrame->Tf;
     INT i;
     static const PCHAR EflagsBits[32] = { " CF", NULL, " PF", " BIT3", " AF", " BIT5",
                                           " ZF", " SF", " TF", " IF", " DF", " OF",
@@ -868,7 +868,7 @@ KdbpCmdRegs(
                   "   ESI  0x%08x   EDI  0x%08x\n"
                   "   EBP  0x%08x\n",
                   Tf->SegCs & 0xFFFF, Tf->Eip,
-                  Tf->HardwareSegSs, Tf->HardwareEsp,
+                  Tf->SegSs, Tf->Esp,
                   Tf->Eax, Tf->Ebx,
                   Tf->Ecx, Tf->Edx,
                   Tf->Esi, Tf->Edi,
@@ -966,7 +966,7 @@ KdbpCmdRegs(
         KdbpPrint("GS  0x%04x  Index 0x%04x  %cDT RPL%d\n",
                   Tf->SegGs, Tf->SegGs >> 3, (Tf->SegGs & (1 << 2)) ? 'L' : 'G', Tf->SegGs & 3);
         KdbpPrint("SS  0x%04x  Index 0x%04x  %cDT RPL%d\n",
-                  Tf->HardwareSegSs, Tf->HardwareSegSs >> 3, (Tf->HardwareSegSs & (1 << 2)) ? 'L' : 'G', Tf->HardwareSegSs & 3);
+                  Tf->SegSs, Tf->SegSs >> 3, (Tf->SegSs & (1 << 2)) ? 'L' : 'G', Tf->SegSs & 3);
     }
     else /* dregs */
     {
@@ -986,7 +986,7 @@ KdbpCmdRegs(
 
 static BOOLEAN
 KdbpTrapFrameFromPrevTss(
-    PKTRAP_FRAME TrapFrame)
+    PCONTEXT TrapFrame)
 {
     ULONG_PTR Eip, Ebp;
     KDESCRIPTOR Gdtr;
@@ -1075,7 +1075,7 @@ KdbpCmdBackTrace(
     ULONGLONG Result = 0;
     ULONG_PTR Frame = KdbCurrentTrapFrame->Tf.Ebp;
     ULONG_PTR Address;
-    KTRAP_FRAME TrapFrame;
+    CONTEXT TrapFrame;
 
     if (Argc >= 2)
     {
@@ -2662,15 +2662,16 @@ KdbpPrint(
         {
             while ((p2 = strrchr(p, '\x1b'))) /* Look for escape character */
             {
+                size_t len = strlen(p2);
                 if (p2[1] == '[')
                 {
                     j = 2;
                     while (!isalpha(p2[j++]));
-                    strcpy(p2, p2 + j);
+                    memmove(p2, p2 + j, len + 1 - j);
                 }
                 else
                 {
-                    strcpy(p2, p2 + 1);
+                    memmove(p2, p2 + 1, len);
                 }
             }
         }
@@ -3007,15 +3008,16 @@ KdbpPager(
         {
             while ((p2 = strrchr(p, '\x1b'))) /* Look for escape character */
             {
+                size_t len = strlen(p2);
                 if (p2[1] == '[')
                 {
                     j = 2;
                     while (!isalpha(p2[j++]));
-                    strcpy(p2, p2 + j);
+                    memmove(p2, p2 + j, len + 1 - j);
                 }
                 else
                 {
-                    strcpy(p2, p2 + 1);
+                    memmove(p2, p2 + 1, len);
                 }
             }
         }
@@ -3672,14 +3674,16 @@ KdpSerialDebugPrint(
 STRING KdpPromptString = RTL_CONSTANT_STRING("kdb:> ");
 extern KSPIN_LOCK KdpSerialSpinLock;
 
-ULONG
+USHORT
 NTAPI
 KdpPrompt(
     _In_reads_bytes_(InStringLength) PCHAR UnsafeInString,
     _In_ USHORT InStringLength,
     _Out_writes_bytes_(OutStringLength) PCHAR UnsafeOutString,
     _In_ USHORT OutStringLength,
-    _In_ KPROCESSOR_MODE PreviousMode)
+    _In_ KPROCESSOR_MODE PreviousMode,
+    _In_ PKTRAP_FRAME TrapFrame,
+    _In_ PKEXCEPTION_FRAME ExceptionFrame)
 {
     USHORT i;
     CHAR Response;

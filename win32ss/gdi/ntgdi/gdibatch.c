@@ -246,12 +246,13 @@ GdiFlushUserBatch(PDC dc, PGDIBATCHHDR pHdr)
         PGDIBSTEXTOUT pgO;
         COLORREF crColor = -1, crBkColor;
         ULONG ulForegroundClr, ulBackgroundClr;
-        DWORD flags = 0, saveflags;
+        DWORD flags = 0, flXform = 0, saveflags, saveflXform = 0;
         FLONG flTextAlign = -1;
         HANDLE hlfntNew;
         PRECTL lprc;
         USHORT jBkMode;
         LONG lBkMode;
+        POINTL ptlViewportOrg;
         if (!dc) break;
         pgO = (PGDIBSTEXTOUT) pHdr;
 
@@ -288,6 +289,16 @@ GdiFlushUserBatch(PDC dc, PGDIBATCHHDR pHdr)
             flags |= DIRTY_CHARSET;
         }
 
+        if ( dc->pdcattr->ptlViewportOrg.x != pgO->ptlViewportOrg.x ||
+             dc->pdcattr->ptlViewportOrg.y != pgO->ptlViewportOrg.y )
+        {
+            saveflXform = dc->pdcattr->flXform & (PAGE_XLATE_CHANGED|WORLD_XFORM_CHANGED|DEVICE_TO_WORLD_INVALID);
+            ptlViewportOrg = dc->pdcattr->ptlViewportOrg;
+            dc->pdcattr->ptlViewportOrg = pgO->ptlViewportOrg;
+            flXform = (PAGE_XLATE_CHANGED|WORLD_XFORM_CHANGED|DEVICE_TO_WORLD_INVALID);
+        }
+
+        dc->pdcattr->flXform  |= flXform;
         dc->pdcattr->ulDirty_ |= flags;
 
         jBkMode = dc->pdcattr->jBkMode;
@@ -312,6 +323,12 @@ GdiFlushUserBatch(PDC dc, PGDIBATCHHDR pHdr)
         dc->pdcattr->jBkMode = jBkMode;
         dc->pdcattr->lBkMode = lBkMode;
 
+        if (saveflXform)
+        {
+            dc->pdcattr->ptlViewportOrg = ptlViewportOrg;
+            dc->pdcattr->flXform |= saveflXform|flXform;
+        }
+
         if (flags & DIRTY_TEXT && crColor != -1)
         {
             dc->pdcattr->crForegroundClr = crColor;
@@ -333,6 +350,7 @@ GdiFlushUserBatch(PDC dc, PGDIBATCHHDR pHdr)
            dc->pdcattr->ulDirty_ &= ~SLOW_WIDTHS;
         }
         dc->pdcattr->ulDirty_ |= saveflags | flags;
+        dc->pdcattr->flXform  |= saveflXform | flXform;
         break;
      }
 
@@ -341,7 +359,8 @@ GdiFlushUserBatch(PDC dc, PGDIBATCHHDR pHdr)
         PGDIBSEXTTEXTOUT pgO;
         COLORREF crBkColor;
         ULONG ulBackgroundClr;
-        DWORD flags = 0, saveflags;
+        POINTL ptlViewportOrg;
+        DWORD flags = 0, flXform = 0, saveflags, saveflXform = 0;
         if (!dc) break;
         pgO = (PGDIBSEXTTEXTOUT) pHdr;
 
@@ -356,6 +375,16 @@ GdiFlushUserBatch(PDC dc, PGDIBATCHHDR pHdr)
             flags |= (DIRTY_BACKGROUND|DIRTY_LINE|DIRTY_FILL);
         }
 
+        if ( dc->pdcattr->ptlViewportOrg.x != pgO->ptlViewportOrg.x ||
+             dc->pdcattr->ptlViewportOrg.y != pgO->ptlViewportOrg.y )
+        {
+            saveflXform = dc->pdcattr->flXform & (PAGE_XLATE_CHANGED|WORLD_XFORM_CHANGED|DEVICE_TO_WORLD_INVALID);
+            ptlViewportOrg = dc->pdcattr->ptlViewportOrg;
+            dc->pdcattr->ptlViewportOrg = pgO->ptlViewportOrg;
+            flXform = (PAGE_XLATE_CHANGED|WORLD_XFORM_CHANGED|DEVICE_TO_WORLD_INVALID);
+        }
+
+        dc->pdcattr->flXform  |= flXform;
         dc->pdcattr->ulDirty_ |= flags;
 
         IntExtTextOutW( dc,
@@ -368,12 +397,19 @@ GdiFlushUserBatch(PDC dc, PGDIBATCHHDR pHdr)
                         NULL,
                         0 );
 
+        if (saveflXform)
+        {
+            dc->pdcattr->ptlViewportOrg = ptlViewportOrg;
+            dc->pdcattr->flXform |= saveflXform|flXform;
+        }
+
         if (flags & DIRTY_BACKGROUND)
         {
             dc->pdcattr->crBackgroundClr = crBkColor;
             dc->pdcattr->ulBackgroundClr = ulBackgroundClr;
         }
         dc->pdcattr->ulDirty_ |= saveflags | flags;
+        dc->pdcattr->flXform  |= saveflXform | flXform;
         break;
      }
 
@@ -388,7 +424,13 @@ GdiFlushUserBatch(PDC dc, PGDIBATCHHDR pHdr)
      }
 
      case GdiBCExtSelClipRgn:
+     {
+        PGDIBSEXTSELCLPRGN pgO;
+        if (!dc) break;
+        pgO = (PGDIBSEXTSELCLPRGN) pHdr;
+        IntGdiExtSelectClipRect( dc, &pgO->rcl, pgO->fnMode);
         break;
+     }
 
      case GdiBCSelObj:
      {
@@ -489,5 +531,3 @@ NtGdiFlushUserBatch(VOID)
   // FIXME: On Windows XP the function returns &pTeb->RealClientId, maybe VOID?
   return STATUS_SUCCESS;
 }
-
-

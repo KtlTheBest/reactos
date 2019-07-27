@@ -1,5 +1,7 @@
 
 list(APPEND FONT_FILES
+    comic.ttf
+    comicbd.ttf
     DejaVuMathTeXGyre.ttf
     DejaVuSans-Bold.ttf
     DejaVuSans-BoldOblique.ttf
@@ -126,6 +128,10 @@ list(APPEND FONT_FILES
     SourceCodePro-Regular.ttf
     SourceCodePro-Semibold.ttf
     SourceCodePro-SemiboldIt.ttf
+    #sserife.fon
+    #sserifeg.fon
+    #sserifer.fon
+    #sserifet.fon
     UniVGA16.ttf)
 
 foreach(item ${FONT_FILES})

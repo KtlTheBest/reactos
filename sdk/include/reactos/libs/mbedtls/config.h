@@ -1897,9 +1897,7 @@
  *
  * This module provides debugging functions.
  */
-#if DBG & 0
- #define MBEDTLS_DEBUG_C /* swyter: we don't even need this level of verboseness, useful only when developing */
-#endif
+//#define MBEDTLS_DEBUG_C /* swyter: we don't even need this level of verboseness, useful only when developing */
 
 /**
  * \def MBEDTLS_DES_C

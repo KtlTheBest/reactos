@@ -59,7 +59,7 @@ KdbSymProcessSymbols(
 BOOLEAN
 KdbSymPrintAddress(
     IN PVOID Address,
-    IN PKTRAP_FRAME Context
+    IN PCONTEXT Context
 );
 
 NTSTATUS
@@ -182,30 +182,12 @@ KdpKdbgInit(
 
 /* KD ROUTINES ***************************************************************/
 
-BOOLEAN
-NTAPI
-KdpCallGdb(
-    IN PKTRAP_FRAME TrapFrame,
-    IN PEXCEPTION_RECORD ExceptionRecord,
-    IN PCONTEXT Context
-);
-
 ULONG
 NTAPI
 KdpPrintString(
     _In_reads_bytes_(Length) PCHAR UnsafeString,
     _In_ ULONG Length,
     _In_ KPROCESSOR_MODE PreviousMode);
-
-ULONG
-NTAPI
-KdpPrompt(
-    _In_reads_bytes_(InStringLength) PCHAR UnsafeInString,
-    _In_ USHORT InStringLength,
-    _Out_writes_bytes_(OutStringLength) PCHAR UnsafeOutString,
-    _In_ USHORT OutStringLength,
-    _In_ KPROCESSOR_MODE PreviousMode
-);
 
 BOOLEAN
 NTAPI
@@ -346,9 +328,6 @@ extern KD_DISPATCH_TABLE WrapperTable;
 
 /* The KD Native Provider List */
 extern LIST_ENTRY KdProviders;
-
-/* Whether to enter KDB as early as possible or not */
-extern BOOLEAN KdpEarlyBreak;
 
 extern PKDEBUG_ROUTINE KiDebugRoutine;
 extern KD_CONTEXT KdpContext;

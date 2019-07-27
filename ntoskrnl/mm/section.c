@@ -197,7 +197,7 @@ NTSTATUS NTAPI PeFmtCreateSection(IN CONST VOID * FileHeader,
     ULONG cbHeadersSize = 0;
     ULONG nSectionAlignment;
     ULONG nFileAlignment;
-    ULONG_PTR ImageBase;
+    ULONG_PTR ImageBase = 0;
     const IMAGE_DOS_HEADER * pidhDosHeader;
     const IMAGE_NT_HEADERS32 * pinhNtHeader;
     const IMAGE_OPTIONAL_HEADER32 * piohOptHeader;
@@ -358,14 +358,17 @@ l_ReadHeaderFromFile:
 
     switch(piohOptHeader->Magic)
     {
-    case IMAGE_NT_OPTIONAL_HDR32_MAGIC:
-#ifdef _WIN64
-    case IMAGE_NT_OPTIONAL_HDR64_MAGIC:
-#endif // _WIN64
-        break;
-
-    default:
-        DIE(("Unrecognized optional header, Magic is %X\n", piohOptHeader->Magic));
+        case IMAGE_NT_OPTIONAL_HDR64_MAGIC:
+#ifndef _WIN64
+            nStatus = STATUS_INVALID_IMAGE_WIN_64;
+            DIE(("Win64 optional header, unsupported\n"));
+#else
+            // Fall through.
+#endif
+        case IMAGE_NT_OPTIONAL_HDR32_MAGIC:
+            break;
+        default:
+            DIE(("Unrecognized optional header, Magic is %X\n", piohOptHeader->Magic));
     }
 
     if (RTL_CONTAINS_FIELD(piohOptHeader, cbOptHeaderSize, SectionAlignment) &&

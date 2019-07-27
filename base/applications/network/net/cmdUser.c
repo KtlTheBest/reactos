@@ -10,6 +10,11 @@
 
 #include "net.h"
 
+#define SECONDS_PER_DAY (60 * 60 * 24)
+#define SECONDS_PER_HOUR (60 * 60)
+#define HOURS_PER_DAY 24
+#define DAYS_PER_WEEK 7
+
 typedef struct _COUNTY_TABLE
 {
     DWORD dwCountryCode;
@@ -134,16 +139,41 @@ PrintDateTime(DWORD dwSeconds)
                    &SystemTime,
                    NULL,
                    DateBuffer,
-                   80);
+                   ARRAYSIZE(DateBuffer));
 
     GetTimeFormatW(LOCALE_USER_DEFAULT,
                    TIME_NOSECONDS,
                    &SystemTime,
                    NULL,
                    TimeBuffer,
-                   80);
+                   ARRAYSIZE(TimeBuffer));
 
     ConPrintf(StdOut, L"%s %s", DateBuffer, TimeBuffer);
+}
+
+
+static
+VOID
+PrintLocalTime(DWORD dwSeconds)
+{
+    LARGE_INTEGER Time;
+    FILETIME FileTime;
+    SYSTEMTIME SystemTime;
+    WCHAR TimeBuffer[80];
+
+    RtlSecondsSince1970ToTime(dwSeconds, &Time);
+    FileTime.dwLowDateTime = Time.u.LowPart;
+    FileTime.dwHighDateTime = Time.u.HighPart;
+    FileTimeToSystemTime(&FileTime, &SystemTime);
+
+    GetTimeFormatW(LOCALE_USER_DEFAULT,
+                   TIME_NOSECONDS,
+                   &SystemTime,
+                   NULL,
+                   TimeBuffer,
+                   ARRAYSIZE(TimeBuffer));
+
+    ConPrintf(StdOut, L"%s", TimeBuffer);
 }
 
 
@@ -193,6 +223,119 @@ GetCountryFromCountryCode(
     }
 
     return FALSE;
+}
+
+
+static
+BOOL
+GetBitValue(
+    PBYTE pBitmap,
+    DWORD dwBitNumber)
+{
+    DWORD dwIndex = dwBitNumber / 8;
+    BYTE Mask = 1 << (dwBitNumber & 7);
+
+    return ((pBitmap[dwIndex] & Mask) != 0);
+}
+
+
+static
+VOID
+SetBitValue(
+    PBYTE pBitmap,
+    DWORD dwBitNumber)
+{
+    DWORD dwIndex = dwBitNumber / 8;
+    BYTE Mask = 1 << (dwBitNumber & 7);
+
+    pBitmap[dwIndex] |= Mask;
+}
+
+
+static
+VOID
+PrintLogonHours(
+    DWORD dwUnitsPerWeek,
+    PBYTE pLogonHours,
+    INT nPaddedLength)
+{
+    DWORD dwUnitsPerDay, dwBitNumber, dwSecondsPerUnit;
+    DWORD dwStartTime, dwEndTime, dwStartDay, dwEndDay, dwBias;
+    BOOL bBitValue, bFirst = TRUE;
+    TIME_ZONE_INFORMATION TimeZoneInformation;
+
+    GetTimeZoneInformation(&TimeZoneInformation);
+    dwBias = (TimeZoneInformation.Bias / 60) * SECONDS_PER_HOUR;
+
+    if ((dwUnitsPerWeek == 0) ||
+        ((dwUnitsPerWeek %7) != 0))
+        return;
+
+    dwUnitsPerDay = dwUnitsPerWeek / 7;
+
+    if (((dwUnitsPerDay % 24) != 0) ||
+        ((dwUnitsPerDay / 24) > 6))
+        return;
+
+    dwSecondsPerUnit = (SECONDS_PER_DAY) / dwUnitsPerDay;
+
+    for (dwBitNumber = 0; dwBitNumber < dwUnitsPerWeek; dwBitNumber++)
+    {
+        bBitValue = GetBitValue(pLogonHours, dwBitNumber);
+        if (bBitValue)
+        {
+            dwStartTime = dwSecondsPerUnit * dwBitNumber;
+
+            while (bBitValue != 0 && dwBitNumber < dwUnitsPerWeek)
+            {
+                dwBitNumber++;
+                if (dwBitNumber < dwUnitsPerWeek)
+                    bBitValue = GetBitValue(pLogonHours, dwBitNumber);
+            }
+
+            dwEndTime = dwSecondsPerUnit * dwBitNumber;
+
+            if (!bFirst)
+                PrintPadding(L' ', nPaddedLength);
+
+            if (dwStartTime == 0 && dwEndTime == (SECONDS_PER_DAY * 7))
+            {
+                PrintMessageString(4302);
+                ConPuts(StdOut, L"\n");
+            }
+            else
+            {
+                dwStartDay = dwStartTime / SECONDS_PER_DAY;
+                dwEndDay = (dwEndTime / SECONDS_PER_DAY) % 7;
+
+                PrintMessageString(4307 + dwStartDay);
+                ConPuts(StdOut, L" ");
+
+                /* Convert from GMT to local timezone */
+                PrintLocalTime((dwStartTime % SECONDS_PER_DAY) - dwBias);
+
+                ConPrintf(StdOut, L" - ");
+                if (dwStartDay != dwEndDay)
+                {
+                    PrintMessageString(4307 + dwEndDay);
+                    ConPuts(StdOut, L" ");
+                }
+
+                /* Convert from GMT to local timezone */
+                PrintLocalTime((dwEndTime % SECONDS_PER_DAY) - dwBias);
+                ConPuts(StdOut, L"\n");
+            }
+
+            bFirst = FALSE;
+        }
+    }
+
+    if (bFirst)
+    {
+        /* No logon hours */
+        PrintMessageString(4434);
+        ConPuts(StdOut, L"\n");
+    }
 }
 
 
@@ -329,8 +472,16 @@ DisplayUser(LPWSTR lpUserName)
 
     PrintPaddedMessageString(4432, nPaddedLength);
     if (pUserInfo->usri4_logon_hours == NULL)
+    {
         PrintMessageString(4302);
-    ConPuts(StdOut, L"\n\n");
+        ConPuts(StdOut, L"\n");
+    }
+    else
+    {
+        PrintLogonHours(pUserInfo->usri4_units_per_week,
+                        pUserInfo->usri4_logon_hours,
+                        nPaddedLength);
+    }
 
     ConPuts(StdOut, L"\n");
     PrintPaddedMessageString(4427, nPaddedLength);
@@ -680,6 +831,319 @@ ParseDate(
 }
 
 
+static
+BOOL
+ParseHour(
+    PWSTR pszString,
+    PWSTR *AmPmArray,
+    PLONG plHour)
+{
+    PWCHAR pChar;
+    LONG lHour = 0;
+
+    if (!iswdigit(pszString[0]))
+        return FALSE;
+
+    pChar = pszString;
+    while (iswdigit(*pChar))
+    {
+        lHour = lHour * 10 + *pChar - L'0';
+        pChar++;
+    }
+
+    if (lHour > 24)
+        return FALSE;
+
+    if (lHour == 24)
+        lHour = 0;
+
+    if ((*pChar != UNICODE_NULL) &&
+        (lHour >= 1) &&
+        (lHour <= 12))
+    {
+        if ((_wcsicmp(pChar, AmPmArray[0]) == 0) ||
+            (_wcsicmp(pChar, AmPmArray[1]) == 0))
+        {
+            if (lHour == 12)
+                lHour = 0;
+        }
+        else if ((_wcsicmp(pChar, AmPmArray[2]) == 0) ||
+                 (_wcsicmp(pChar, AmPmArray[3]) == 0))
+        {
+            if (lHour != 12)
+                lHour += 12;
+        }
+        else
+        {
+            return FALSE;
+        }
+    }
+
+    *plHour = lHour;
+
+    return TRUE;
+}
+
+
+static
+BOOL
+ParseDay(
+    PWSTR pszString,
+    PWSTR *ShortDays,
+    PWSTR *LongDays,
+    PDWORD pdwDay)
+{
+    DWORD i;
+
+    for (i = 0; i < 7; i++)
+    {
+        if (_wcsicmp(pszString, ShortDays[i]) == 0 ||
+            _wcsicmp(pszString, LongDays[i]) == 0)
+        {
+            *pdwDay = i;
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+
+static
+DWORD
+LocalToGmtHour(
+    LONG lLocalHour,
+    LONG lBias)
+{
+    LONG lGmtHour;
+
+    lGmtHour = lLocalHour + lBias;
+    if (lGmtHour < 0)
+        lGmtHour += UNITS_PER_WEEK;
+    else if (lGmtHour > UNITS_PER_WEEK)
+        lGmtHour -= UNITS_PER_WEEK;
+
+    return (DWORD)lGmtHour;
+}
+
+
+static
+DWORD
+ParseLogonHours(
+    PWSTR pszParams,
+    PBYTE *ppLogonBitmap,
+    PDWORD pdwUnitsPerWeek)
+{
+    TIME_ZONE_INFORMATION TimeZoneInformation;
+    PBYTE pLogonBitmap = NULL;
+    DWORD dwError = ERROR_SUCCESS;
+    WCHAR szBuffer[32];
+    PWSTR ptr1, ptr2;
+    WCHAR prevSep, nextSep;
+    DWORD dwStartDay, dwEndDay, i, j;
+    LONG lStartHour, lEndHour, lBias;
+    BYTE DayBitmap;
+    BYTE HourBitmap[6];
+    LPWSTR ShortDays[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    LPWSTR LongDays[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    LPWSTR AmPmArray[4] = {NULL, NULL, NULL, NULL};
+
+    GetTimeZoneInformation(&TimeZoneInformation);
+    lBias = TimeZoneInformation.Bias / 60;
+
+    pLogonBitmap = HeapAlloc(GetProcessHeap(),
+                             HEAP_ZERO_MEMORY,
+                             UNITS_PER_WEEK / 8);
+    if (pLogonBitmap == NULL)
+        return ERROR_OUTOFMEMORY;
+
+    if (*pszParams == UNICODE_NULL)
+    {
+        goto done;
+    }
+
+    if (wcsicmp(pszParams, L"all") == 0)
+    {
+        FillMemory(pLogonBitmap, UNITS_PER_WEEK / 8, 0xFF);
+        goto done;
+    }
+
+    for (i = 0; i < 7; i++)
+    {
+        FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                       FORMAT_MESSAGE_FROM_HMODULE |
+                       FORMAT_MESSAGE_IGNORE_INSERTS,
+                       hModuleNetMsg,
+                       4314 + i,
+                       LANG_USER_DEFAULT,
+                       (LPWSTR)&ShortDays[i],
+                       0,
+                       NULL);
+
+        FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                       FORMAT_MESSAGE_FROM_HMODULE |
+                       FORMAT_MESSAGE_IGNORE_INSERTS,
+                       hModuleNetMsg,
+                       4307 + i,
+                       LANG_USER_DEFAULT,
+                       (LPWSTR)&LongDays[i],
+                       0,
+                       NULL);
+    }
+
+    for (i = 0; i < 4; i++)
+    {
+        FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                       FORMAT_MESSAGE_FROM_HMODULE |
+                       FORMAT_MESSAGE_IGNORE_INSERTS,
+                       hModuleNetMsg,
+                       4322 + i,
+                       LANG_USER_DEFAULT,
+                       (LPWSTR)&AmPmArray[i],
+                       0,
+                       NULL);
+    }
+
+    ZeroMemory(&DayBitmap, sizeof(DayBitmap));
+    ZeroMemory(HourBitmap, sizeof(HourBitmap));
+
+    ZeroMemory(szBuffer, sizeof(szBuffer));
+    ptr1 = pszParams;
+    ptr2 = szBuffer;
+    prevSep = UNICODE_NULL;
+    nextSep = UNICODE_NULL;
+    for (;;)
+    {
+        if (*ptr1 != L'-' && *ptr1 != L',' && *ptr1 != L';' && *ptr1 != UNICODE_NULL)
+        {
+            *ptr2 = *ptr1;
+            ptr2++;
+        }
+        else
+        {
+            prevSep = nextSep;
+            nextSep = *ptr1;
+
+            if (prevSep != L'-')
+            {
+                /* Set first value */
+                if (iswdigit(szBuffer[0]))
+                {
+                    /* Parse hour */
+                    if (!ParseHour(szBuffer, AmPmArray, &lStartHour))
+                    {
+                        dwError = 3769;
+                        break;
+                    }
+
+                    SetBitValue(HourBitmap, LocalToGmtHour(lStartHour, lBias));
+                }
+                else
+                {
+                    /* Parse day */
+                    if (!ParseDay(szBuffer, ShortDays, LongDays, &dwStartDay))
+                    {
+                        dwError = 3768;
+                        break;
+                    }
+
+                    SetBitValue(&DayBitmap, dwStartDay);
+                }
+            }
+            else
+            {
+                /* Set second value */
+                if (iswdigit(szBuffer[0]))
+                {
+                    /* Parse hour */
+                    if (!ParseHour(szBuffer, AmPmArray, &lEndHour))
+                    {
+                        dwError = 3769;
+                        break;
+                    }
+
+                    if (lEndHour <= lStartHour)
+                        lEndHour += HOURS_PER_DAY;
+
+                    for (i = LocalToGmtHour(lStartHour, lBias); i < LocalToGmtHour(lEndHour, lBias); i++)
+                        SetBitValue(HourBitmap, i);
+                }
+                else
+                {
+                    /* Parse day */
+                    if (!ParseDay(szBuffer, ShortDays, LongDays, &dwEndDay))
+                    {
+                        dwError = 3768;
+                        break;
+                    }
+
+                    if (dwEndDay <= dwStartDay)
+                        dwEndDay += DAYS_PER_WEEK;
+
+                    for (i = dwStartDay; i <= dwEndDay; i++)
+                        SetBitValue(&DayBitmap, i % DAYS_PER_WEEK);
+                }
+            }
+
+            if (*ptr1 == L';' || *ptr1 == UNICODE_NULL)
+            {
+                /* Fill the logon hour bitmap */
+                for (i = 0; i < DAYS_PER_WEEK; i++)
+                {
+                    if (GetBitValue(&DayBitmap, i))
+                    {
+                        for (j = 0; j < 48; j++)
+                        {
+                            if (GetBitValue(HourBitmap, j))
+                                SetBitValue(pLogonBitmap, ((i * HOURS_PER_DAY) + j) % UNITS_PER_WEEK);
+                        }
+                    }
+                }
+
+                /* Reset the Bitmaps */
+                ZeroMemory(&DayBitmap, sizeof(DayBitmap));
+                ZeroMemory(HourBitmap, sizeof(HourBitmap));
+            }
+
+            if (*ptr1 == UNICODE_NULL)
+                break;
+
+            ZeroMemory(szBuffer, sizeof(szBuffer));
+            ptr2 = szBuffer;
+        }
+
+        ptr1++;
+    }
+
+done:
+    for (i = 0; i < 7; i++)
+    {
+        LocalFree(ShortDays[i]);
+        LocalFree(LongDays[i]);
+    }
+
+    for (i = 0; i < 4; i++)
+    {
+        LocalFree(AmPmArray[i]);
+    }
+
+    if (dwError == ERROR_SUCCESS)
+    {
+        *ppLogonBitmap = pLogonBitmap;
+        *pdwUnitsPerWeek = UNITS_PER_WEEK;
+    }
+    else
+    {
+        if (pLogonBitmap != NULL)
+            HeapFree(GetProcessHeap(), 0, pLogonBitmap);
+        *ppLogonBitmap = NULL;
+        *pdwUnitsPerWeek = 0;
+    }
+
+    return dwError;
+}
+
+
 INT
 cmdUser(
     INT argc,
@@ -702,6 +1166,8 @@ cmdUser(
     LPWSTR endptr;
     DWORD value;
     BOOL bPasswordAllocated = FALSE;
+    PBYTE pLogonHours = NULL;
+    DWORD dwUnitsPerWeek;
     NET_API_STATUS Status;
 
     i = 2;
@@ -755,7 +1221,7 @@ cmdUser(
         ConPrintf(StdOut, L"Status: %lu\n", Status);
         return 0;
     }
-    else if (lpUserName != NULL && lpPassword == NULL)
+    else if (lpUserName != NULL && lpPassword == NULL && argc == 3)
     {
         Status = DisplayUser(lpUserName);
         ConPrintf(StdOut, L"Status: %lu\n", Status);
@@ -910,8 +1376,19 @@ cmdUser(
         }
         else if (_wcsnicmp(argv[j], L"/times:", 7) == 0)
         {
-            /* FIXME */
-            ConPuts(StdErr, L"The /TIMES option is not supported yet.\n");
+            Status = ParseLogonHours(&argv[j][7],
+                                     &pLogonHours,
+                                     &dwUnitsPerWeek);
+            if (Status == ERROR_SUCCESS)
+            {
+                pUserInfo->usri4_logon_hours = pLogonHours;
+                pUserInfo->usri4_units_per_week = dwUnitsPerWeek;
+            }
+            else
+            {
+                PrintMessageString(Status);
+                goto done;
+            }
         }
         else if (_wcsnicmp(argv[j], L"/usercomment:", 13) == 0)
         {
@@ -976,6 +1453,9 @@ cmdUser(
     }
 
 done:
+    if (pLogonHours != NULL)
+        HeapFree(GetProcessHeap(), 0, pLogonHours);
+
     if (pWorkstations != NULL)
         HeapFree(GetProcessHeap(), 0, pWorkstations);
 

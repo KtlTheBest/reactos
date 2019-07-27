@@ -4,7 +4,7 @@ add_subdirectory(redirptest)
 add_message_headers(ANSI FormatMessage.mc)
 
 list(APPEND SOURCE
-    Console.c
+    ConsoleCP.c
     CreateProcess.c
     DefaultActCtx.c
     DeviceIoControl.c
@@ -27,6 +27,7 @@ list(APPEND SOURCE
     Mailslot.c
     MultiByteToWideChar.c
     PrivMoveFileIdentityW.c
+    SetComputerNameExW.c
     SetConsoleWindowInfo.c
     SetCurrentDirectory.c
     SetUnhandledExceptionFilter.c

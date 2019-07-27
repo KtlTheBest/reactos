@@ -131,7 +131,7 @@ OFNHookProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 *pch = 0;
                 FileExtFromFilter(pch, pchTitle, pon->lpOFN);
                 SendMessage(hParent, CDM_SETCONTROLTEXT, 0x047c, (LPARAM)pchTitle);
-                lstrcpyn(pon->lpOFN->lpstrFile, Path, SIZEOF(pon->lpOFN->lpstrFile));
+                lstrcpyn(pon->lpOFN->lpstrFile, Path, pon->lpOFN->nMaxFile);
             }
         }
         break;
@@ -355,6 +355,7 @@ _tWinMain (HINSTANCE hThisInstance, HINSTANCE hPrevInstance, LPTSTR lpszArgument
     ofn.lpstrFileTitle = ofnFiletitle;
     ofn.nMaxFileTitle  = SIZEOF(ofnFiletitle);
     ofn.Flags          = OFN_HIDEREADONLY;
+    ofn.lpstrDefExt    = L"bmp";
 
     CopyMemory(sfnFilename, filepathname, sizeof(filepathname));
     CString strExporters;
@@ -371,6 +372,7 @@ _tWinMain (HINSTANCE hThisInstance, HINSTANCE hPrevInstance, LPTSTR lpszArgument
     sfn.nMaxFileTitle  = SIZEOF(sfnFiletitle);
     sfn.Flags          = OFN_OVERWRITEPROMPT | OFN_HIDEREADONLY | OFN_EXPLORER | OFN_ENABLEHOOK;
     sfn.lpfnHook       = OFNHookProc;
+    sfn.lpstrDefExt    = L"bmp";
 
     /* creating the size boxes */
     RECT sizeboxPos = {0, 0, 0 + 3, 0 + 3};

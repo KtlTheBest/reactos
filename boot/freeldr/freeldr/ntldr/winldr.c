@@ -358,6 +358,7 @@ WinLdrLoadModule(PCSTR ModuleName,
     //CHAR ProgressString[256];
 
     /* Inform user we are loading files */
+    //UiDrawBackdrop();
     //sprintf(ProgressString, "Loading %s...", FileName);
     //UiDrawProgressBarCenter(1, 100, ProgressString);
 
@@ -831,7 +832,7 @@ LoadAndBootWindowsCommon(
     LoaderBlockVA = PaToVa(LoaderBlock);
 
     /* "Stop all motors", change videomode */
-    MachPrepareForReactOS(Setup);
+    MachPrepareForReactOS();
 
     /* Cleanup ini file */
     IniCleanup();

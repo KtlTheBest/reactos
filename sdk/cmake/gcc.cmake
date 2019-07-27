@@ -61,10 +61,6 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
     set(CMAKE_CXX_COMPILE_OPTIONS_PIC "")
     set(CMAKE_C_COMPILE_OPTIONS_PIE "")
     set(CMAKE_CXX_COMPILE_OPTIONS_PIE "")
-    set(CMAKE_SHARED_LIBRARY_C_FLAGS "")
-    set(CMAKE_SHARED_LIBRARY_CXX_FLAGS "")
-    set(CMAKE_SHARED_MODULE_C_FLAGS "")
-    set(CMAKE_SHARED_MODULE_CXX_FLAGS "")
     set(CMAKE_ASM_FLAGS_DEBUG "")
     set(CMAKE_C_FLAGS_DEBUG "")
     set(CMAKE_CXX_FLAGS_DEBUG "")
@@ -103,14 +99,6 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     endif()
 endif()
 
-# For some reason, cmake sets -fPIC, and we don't want it
-if(DEFINED CMAKE_SHARED_LIBRARY_ASM_FLAGS)
-    string(REPLACE "-fPIC" "" CMAKE_SHARED_LIBRARY_ASM_FLAGS ${CMAKE_SHARED_LIBRARY_ASM_FLAGS})
-endif()
-if(DEFINED CMAKE_SHARED_MODULE_ASM_FLAGS)
-    string(REPLACE "-fPIC" "" CMAKE_SHARED_MODULE_ASM_FLAGS ${CMAKE_SHARED_MODULE_ASM_FLAGS})
-endif()
-
 # Tuning
 if(ARCH STREQUAL "i386")
     add_compile_flags("-march=${OARCH} -mtune=${TUNE}")
@@ -125,6 +113,9 @@ endif()
 
 add_compile_flags("-Wall -Wpointer-arith")
 add_compile_flags("-Wno-char-subscripts -Wno-multichar -Wno-unused-value")
+add_compile_flags("-Wno-unused-const-variable")
+add_compile_flags("-Wno-unused-local-typedefs")
+add_compile_flags("-Wno-deprecated")
 
 if(NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
     add_compile_flags("-Wno-maybe-uninitialized")
@@ -185,6 +176,9 @@ elseif(ARCH STREQUAL "arm")
 endif()
 
 add_definitions(-D_inline=__inline)
+
+# Fix build with GLIBCXX + our c++ headers
+add_definitions(-D_GLIBCXX_HAVE_BROKEN_VSWPRINTF)
 
 # Alternative arch name
 if(ARCH STREQUAL "amd64")
@@ -265,7 +259,9 @@ set(CMAKE_EXE_LINKER_FLAGS "-nostdlib -Wl,--enable-auto-image-base,--disable-aut
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS_INIT} -Wl,--disable-stdcall-fixup")
 set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS_INIT} -Wl,--disable-stdcall-fixup")
 
-if((NOT CMAKE_C_COMPILER_ID STREQUAL "Clang") AND (NOT CMAKE_BUILD_TYPE STREQUAL "Release"))
+if((CMAKE_C_COMPILER_ID STREQUAL "GNU") AND
+   (NOT CMAKE_BUILD_TYPE STREQUAL "Release") AND
+   (NOT CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 7.0))
     # FIXME: Set this once Clang toolchain works with it
     set(_compress_debug_sections_flag "-Wa,--compress-debug-sections")
 endif()
@@ -327,6 +323,8 @@ function(set_module_type_toolchain MODULE TYPE)
         if(${TYPE} STREQUAL "wdmdriver")
             add_target_link_flags(${MODULE} "-Wl,--wdmdriver")
         endif()
+        #Disabled due to LD bug: ROSBE-154
+        #add_linker_script(${MODULE} ${REACTOS_SOURCE_DIR}/sdk/cmake/init-section.lds)
     endif()
     
     if(STACK_PROTECTOR)
@@ -479,8 +477,5 @@ endmacro()
 function(add_linker_script _target _linker_script_file)
     get_filename_component(_file_full_path ${_linker_script_file} ABSOLUTE)
     add_target_link_flags(${_target} "-Wl,-T,${_file_full_path}")
-
-    # Unfortunately LINK_DEPENDS is ignored in non-Makefile generators (for now...)
-    # See also http://www.cmake.org/pipermail/cmake/2010-May/037206.html
     add_target_property(${_target} LINK_DEPENDS ${_file_full_path})
 endfunction()

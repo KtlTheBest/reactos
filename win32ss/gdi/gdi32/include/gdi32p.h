@@ -392,6 +392,21 @@ GdiAllocBatchCommand(
     /* Check if we have a valid environment */
     if (!pTeb || !pTeb->Win32ThreadInfo) return NULL;
 
+    /* Get the size of the entry */
+    if      (Cmd == GdiBCPatBlt) cjSize = sizeof(GDIBSPATBLT);
+    else if (Cmd == GdiBCPolyPatBlt) cjSize = sizeof(GDIBSPPATBLT);
+    else if (Cmd == GdiBCTextOut) cjSize = sizeof(GDIBSTEXTOUT);
+    else if (Cmd == GdiBCExtTextOut) cjSize = sizeof(GDIBSEXTTEXTOUT);
+    else if (Cmd == GdiBCSetBrushOrg) cjSize = sizeof(GDIBSSETBRHORG);
+    else if (Cmd == GdiBCExtSelClipRgn) cjSize = sizeof(GDIBSEXTSELCLPRGN);
+    else if (Cmd == GdiBCSelObj) cjSize = sizeof(GDIBSOBJECT);
+    else if (Cmd == GdiBCDelRgn) cjSize = sizeof(GDIBSOBJECT);
+    else if (Cmd == GdiBCDelObj) cjSize = sizeof(GDIBSOBJECT);
+    else cjSize = 0;
+
+    /* Unsupported operation */
+    if (cjSize == 0) return NULL;
+
     /* Do we use a DC? */
     if (hdc)
     {
@@ -401,21 +416,6 @@ GdiAllocBatchCommand(
         /* If not, check if the batch DC equal to our DC */
         else if (pTeb->GdiTebBatch.HDC != hdc) return NULL;
     }
-
-    /* Get the size of the entry */
-    if      (Cmd == GdiBCPatBlt) cjSize = sizeof(GDIBSPATBLT);
-    else if (Cmd == GdiBCPolyPatBlt) cjSize = sizeof(GDIBSPPATBLT);
-    else if (Cmd == GdiBCTextOut) cjSize = sizeof(GDIBSTEXTOUT);
-    else if (Cmd == GdiBCExtTextOut) cjSize = sizeof(GDIBSEXTTEXTOUT);
-    else if (Cmd == GdiBCSetBrushOrg) cjSize = sizeof(GDIBSSETBRHORG);
-    else if (Cmd == GdiBCExtSelClipRgn) cjSize = 0;
-    else if (Cmd == GdiBCSelObj) cjSize = sizeof(GDIBSOBJECT);
-    else if (Cmd == GdiBCDelRgn) cjSize = sizeof(GDIBSOBJECT);
-    else if (Cmd == GdiBCDelObj) cjSize = sizeof(GDIBSOBJECT);
-    else cjSize = 0;
-
-    /* Unsupported operation */
-    if (cjSize == 0) return NULL;
 
     /* Check if the buffer is full */
     if ((pTeb->GdiBatchCount >= GDI_BatchLimit) ||

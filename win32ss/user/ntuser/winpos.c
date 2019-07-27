@@ -960,7 +960,7 @@ co_WinPosGetMinMaxInfo(PWND Window, POINT* MaxSize, POINT* MaxPos,
 
     // Handle special case while maximized. CORE-15893
     if ((adjustedStyle & WS_THICKFRAME) && !(adjustedStyle & WS_CHILD) && !(adjustedStyle & WS_MINIMIZE))
-         adjust += 2;
+         adjust += 1;
 
     xinc = yinc = adjust;
 
@@ -1653,6 +1653,68 @@ WinPosFixupFlags(WINDOWPOS *WinPos, PWND Wnd)
    return TRUE;
 }
 
+//
+// This is a NC HACK fix for forcing painting of non client areas.
+// Further troubleshooting in painting.c is required to remove this hack.
+// See CORE-7166 & CORE-15934
+//
+VOID
+ForceNCPaintErase(PWND Wnd, HRGN hRgn, PREGION pRgn)
+{
+   HDC hDC;
+   PREGION RgnUpdate;
+   UINT RgnType;
+   BOOL Create = FALSE;
+
+   if (Wnd->hrgnUpdate == NULL)
+   {
+       Wnd->hrgnUpdate = NtGdiCreateRectRgn(0, 0, 0, 0);
+       IntGdiSetRegionOwner(Wnd->hrgnUpdate, GDI_OBJ_HMGR_PUBLIC);
+       Create = TRUE;
+   }
+
+   if (Wnd->hrgnUpdate != HRGN_WINDOW)
+   {
+       RgnUpdate = REGION_LockRgn(Wnd->hrgnUpdate);
+       if (RgnUpdate)
+       {
+           RgnType = IntGdiCombineRgn(RgnUpdate, RgnUpdate, pRgn, RGN_OR);
+           REGION_UnlockRgn(RgnUpdate);
+           if (RgnType == NULLREGION)
+           {
+               IntGdiSetRegionOwner(Wnd->hrgnUpdate, GDI_OBJ_HMGR_POWNED);
+               GreDeleteObject(Wnd->hrgnUpdate);
+               Wnd->hrgnUpdate = NULL;
+               Create = FALSE;
+           }
+       }
+   }
+
+   IntSendNCPaint( Wnd, hRgn ); // Region can be deleted by the application.
+
+   if (Wnd->hrgnUpdate)
+   {
+       hDC = UserGetDCEx( Wnd,
+                          Wnd->hrgnUpdate,
+                          DCX_CACHE|DCX_USESTYLE|DCX_INTERSECTRGN|DCX_KEEPCLIPRGN);
+
+      Wnd->state &= ~(WNDS_SENDERASEBACKGROUND|WNDS_ERASEBACKGROUND);
+      // Kill the loop, so Clear before we send.
+      if (!co_IntSendMessage(UserHMGetHandle(Wnd), WM_ERASEBKGND, (WPARAM)hDC, 0))
+      {
+          Wnd->state |= (WNDS_SENDERASEBACKGROUND|WNDS_ERASEBACKGROUND);
+      }
+      UserReleaseDC(Wnd, hDC, FALSE);
+   }
+
+   if (Create)
+   {
+      IntGdiSetRegionOwner(Wnd->hrgnUpdate, GDI_OBJ_HMGR_POWNED);
+      GreDeleteObject(Wnd->hrgnUpdate);
+      Wnd->hrgnUpdate = NULL;
+   }
+}
+
 /* x and y are always screen relative */
 BOOLEAN FASTCALL
 co_WinPosSetWindowPos(
@@ -1770,7 +1832,7 @@ co_WinPosSetWindowPos(
          }
 
          /* Calculate the non client area for resizes, as this is used in the copy region */
-         if (!(WinPos.flags & SWP_NOSIZE))
+         if ((WinPos.flags & (SWP_NOSIZE | SWP_FRAMECHANGED)) != SWP_NOSIZE)
          {
              VisBeforeJustClient = VIS_ComputeVisibleRegion(Window, TRUE, FALSE,
                  (Window->style & WS_CLIPSIBLINGS) ? TRUE : FALSE);
@@ -1862,6 +1924,14 @@ co_WinPosSetWindowPos(
 
    DceResetActiveDCEs(Window); // For WS_VISIBLE changes.
 
+   // Change or update, set send non-client paint flag.
+   if ( Window->style & WS_VISIBLE &&
+       (WinPos.flags & SWP_STATECHANGED || (!(Window->state2 & WNDS2_WIN31COMPAT) && WinPos.flags & SWP_NOREDRAW ) ) )
+   {
+      TRACE("Set WNDS_SENDNCPAINT %p\n",Window);
+      Window->state |= WNDS_SENDNCPAINT;
+   }
+
    if (!(WinPos.flags & SWP_NOREDRAW))
    {
       /* Determine the new visible region */
@@ -1903,12 +1973,16 @@ co_WinPosSetWindowPos(
           */
 
          CopyRgn = IntSysCreateRectpRgn(0, 0, 0, 0);
-         if (WinPos.flags & SWP_NOSIZE)
+         if ((WinPos.flags & SWP_NOSIZE) && (WinPos.flags & SWP_NOCLIENTSIZE))
             RgnType = IntGdiCombineRgn(CopyRgn, VisAfter, VisBefore, RGN_AND);
          else if (VisBeforeJustClient != NULL)
          {
             RgnType = IntGdiCombineRgn(CopyRgn, VisAfter, VisBeforeJustClient, RGN_AND);
-            REGION_Delete(VisBeforeJustClient);
+         }
+
+         if (VisBeforeJustClient != NULL)
+         {
+             REGION_Delete(VisBeforeJustClient);
          }
 
          /* Now use in copying bits which are in the update region. */
@@ -2018,7 +2092,7 @@ co_WinPosSetWindowPos(
                    IntInvalidateWindows( Window, DirtyRgn, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
                 }
              }
-             else if ( RgnType != ERROR && RgnType == NULLREGION ) // Must be the same. See CORE-7166 & CORE-15934
+             else if ( RgnType != ERROR && RgnType == NULLREGION ) // Must be the same. See CORE-7166 & CORE-15934, NC HACK fix.
              {
                 if ( !PosChanged &&
                      !(WinPos.flags & SWP_DEFERERASE) &&
@@ -2035,7 +2109,13 @@ co_WinPosSetWindowPos(
 
                     if ( !(pwnd->style & WS_CHILD) )
                     {
-                        IntSendNCPaint(pwnd, HRGN_WINDOW); // Paint the whole frame.
+                        HRGN DcRgn = NtGdiCreateRectRgn(0, 0, 0, 0);
+                        PREGION DcRgnObj = REGION_LockRgn(DcRgn);
+                        TRACE("SWP_FRAMECHANGED win %p hRgn %p\n",pwnd, DcRgn);
+                        IntGdiCombineRgn(DcRgnObj, VisBefore, NULL, RGN_COPY);
+                        REGION_UnlockRgn(DcRgnObj);
+                        ForceNCPaintErase(pwnd, DcRgn, DcRgnObj);
+                        GreDeleteObject(DcRgn);
                     }
                 }
              }
@@ -2106,8 +2186,8 @@ co_WinPosSetWindowPos(
        PWND Parent = Window->spwndParent;
        if ( !(Window->style & WS_CHILD) && (Parent) && (Parent->style & WS_CLIPCHILDREN))
        {
-           TRACE("SWP_FRAMECHANGED Parent WS_CLIPCHILDREN\n");
-           UserSyncAndPaintWindows( Parent, RDW_CLIPCHILDREN);
+           TRACE("SWP_FRAMECHANGED Parent %p WS_CLIPCHILDREN %p\n",Parent,Window);
+           UserSyncAndPaintWindows( Parent, RDW_CLIPCHILDREN); // NC should redraw here, see NC HACK fix.
        }
    }
 

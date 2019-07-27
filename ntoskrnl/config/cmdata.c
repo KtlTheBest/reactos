@@ -141,7 +141,7 @@ INIT_SECTION CM_SYSTEM_CONTROL_VECTOR CmControlVector[] =
     {
         L"Session Manager",
         L"ProtectionMode",
-        &DummyData,
+        &ObpProtectionMode,
         NULL,
         NULL
     },
@@ -149,7 +149,7 @@ INIT_SECTION CM_SYSTEM_CONTROL_VECTOR CmControlVector[] =
     {
         L"Session Manager",
         L"ObjectSecurityMode",
-        &DummyData,
+        &ObpObjectSecurityMode,
         NULL,
         NULL
     },
@@ -157,7 +157,7 @@ INIT_SECTION CM_SYSTEM_CONTROL_VECTOR CmControlVector[] =
     {
         L"Session Manager",
         L"LUIDDeviceMapsDisabled",
-        &DummyData,
+        &ObpLUIDDeviceMapsDisabled,
         NULL,
         NULL
     },

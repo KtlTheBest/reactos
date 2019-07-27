@@ -99,10 +99,6 @@ add_compile_flags("/wd4018")
 # - C4700: uninitialized variable usage
 # - C4716: function must return a value
 add_compile_flags("/we4013 /we4020 /we4022 /we4028 /we4047 /we4098 /we4113 /we4129 /we4133 /we4163 /we4229 /we4311 /we4312 /we4603 /we4700 /we4716")
-# TODO: Check and fix other architectures.
-if(ARCH STREQUAL "i386")
-    add_compile_flags("/we4028")
-endif()
 
 # - C4189: local variable initialized but not referenced
 # Not in Release mode and not with MSVC 2010
@@ -331,9 +327,9 @@ function(set_module_type_toolchain MODULE TYPE)
         add_target_link_flags(${MODULE} "/DLL")
     elseif(${TYPE} STREQUAL "kernelmodedriver")
         # Disable linker warning 4078 (multiple sections found with different attributes) for INIT section use
-        add_target_link_flags(${MODULE} "/DRIVER /IGNORE:4078")
+        add_target_link_flags(${MODULE} "/DRIVER /IGNORE:4078 /SECTION:INIT,D")
     elseif(${TYPE} STREQUAL "wdmdriver")
-        add_target_link_flags(${MODULE} "/DRIVER:WDM /IGNORE:4078")
+        add_target_link_flags(${MODULE} "/DRIVER:WDM /IGNORE:4078 /SECTION:INIT,D")
     endif()
 
     if(RUNTIME_CHECKS)
@@ -616,9 +612,6 @@ function(add_linker_script _target _linker_script_file)
         # add_custom_target("${_target}_${_file_name}" ALL DEPENDS ${_generated_file})
         # add_dependencies(${_target} "${_target}_${_file_name}")
         add_target_link_flags(${_target} "@${_generated_file}")
-
-        # Unfortunately LINK_DEPENDS is ignored in non-Makefile generators (for now...)
-        # See also http://www.cmake.org/pipermail/cmake/2010-May/037206.html
-        add_target_property(${_target} LINK_DEPENDS ${_generated_file})
+        add_target_property(${_target} LINK_DEPENDS ${_file_full_path})
     endif()
 endfunction()

@@ -14,6 +14,7 @@
 #define NDEBUG
 #include <debug.h>
 
+#include "concfg/font.h"
 #include "guiterm.h"
 #include "guisettings.h"
 
@@ -150,7 +151,6 @@ GuiConsoleShowConsoleProperties(PGUI_CONSOLE_DATA GuiData,
         else // if (GetType(ActiveBuffer) == GRAPHICS_BUFFER)
         {
             // PGRAPHICS_SCREEN_BUFFER Buffer = (PGRAPHICS_SCREEN_BUFFER)ActiveBuffer;
-            DPRINT1("GuiConsoleShowConsoleProperties - Graphics buffer\n");
 
             // FIXME: Gather defaults from the registry ?
             pSharedInfo->ScreenAttributes = DEFAULT_SCREEN_ATTRIB;
@@ -331,7 +331,8 @@ GuiApplyUserSettings(PGUI_CONSOLE_DATA GuiData,
 
         /* Set the terminal informations */
 
-        /* Change the font */
+        /* Refresh the additional TrueType fonts cache and change the font */
+        RefreshTTFontCache();
         InitFonts(GuiData,
                   pConInfo->FaceName,
                   pConInfo->FontFamily,

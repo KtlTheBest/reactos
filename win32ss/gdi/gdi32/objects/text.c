@@ -526,6 +526,7 @@ ExtTextOutW(
                 pgO = GdiAllocBatchCommand(hdc, GdiBCExtTextOut);
                 if (pgO)
                 {
+                    pdcattr->ulDirty_ |= DC_MODE_DIRTY;
                     pgO->Count = cwc;
                     pgO->Rect = *lprc;
                     pgO->Options = fuOptions;
@@ -567,6 +568,7 @@ ExtTextOutW(
 
                 if ((pTeb->GdiTebBatch.Offset + cjSize ) <= GDIBATCHBUFSIZE)
                 {
+                    pdcattr->ulDirty_ |= DC_MODE_DIRTY|DC_FONTTEXT_DIRTY;
                     pgO->cbCount = cwc;
                     pgO->x = x;
                     pgO->y = y;
